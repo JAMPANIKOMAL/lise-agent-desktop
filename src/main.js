@@ -45,12 +45,23 @@ function addLog(message, type = 'info') {
 
 // --- WebSocket Connection ---
 let socket;
+let retryCount = 0;
+const maxRetries = 3;
+let retryTimeout;
 
-function connectWebSocket(name, ip) {
+function connectWebSocket(name, ip, isRetry = false) {
+    if (!isRetry) {
+        retryCount = 0;
+        addLog(`Attempting to connect to orchestrator at ${ip}:8000...`);
+    } else {
+        addLog(`Retry attempt ${retryCount}/${maxRetries}...`);
+    }
+    
     // Connect to the Orchestrator's WebSocket
     socket = new WebSocket(`ws://${ip}:8000/ws/${name}`);
 
     socket.onopen = () => {
+        retryCount = 0; // Reset retry count on successful connection
         addLog(`Connected to Orchestrator at ${ip} as ${name}.`);
         if (statusDisplay) {
             statusDisplay.textContent = 'Status: Connected';
@@ -79,8 +90,11 @@ function connectWebSocket(name, ip) {
         }
     };
 
-    socket.onclose = () => {
-        addLog("Disconnected from Orchestrator.");
+    socket.onclose = (event) => {
+        const reason = event.reason || 'No reason provided';
+        const code = event.code || 'Unknown';
+        addLog(`Disconnected from Orchestrator. Code: ${code}, Reason: ${reason}`);
+        
         if (statusDisplay) {
             statusDisplay.textContent = 'Status: Disconnected';
             statusDisplay.className = 'text-right px-3 py-1 rounded-md bg-red-800 border border-red-500';
@@ -91,11 +105,35 @@ function connectWebSocket(name, ip) {
         if (simulationView) {
             simulationView.classList.add('hidden');
         }
+        
+        // Attempt reconnection if it wasn't a clean close and we haven't exceeded retry limit
+        if (!event.wasClean && retryCount < maxRetries && !isRetry) {
+            retryCount++;
+            retryTimeout = setTimeout(() => {
+                connectWebSocket(name, ip, true);
+            }, 2000 * retryCount); // Exponential backoff
+        }
     };
 
     socket.onerror = (error) => {
-        const errorMessage = error?.message || error?.type || 'Unknown WebSocket error';
+        let errorMessage = 'Unknown WebSocket error';
+        
+        // Try to extract more meaningful error information
+        if (error.message) {
+            errorMessage = error.message;
+        } else if (error.type) {
+            errorMessage = `WebSocket error type: ${error.type}`;
+        } else if (error.target && error.target.readyState === WebSocket.CLOSED) {
+            errorMessage = 'Connection closed - Orchestrator may not be running';
+        } else if (error.target && error.target.readyState === WebSocket.CONNECTING) {
+            errorMessage = 'Connection failed - Cannot reach orchestrator';
+        }
+        
         addLog(`WebSocket Error: ${errorMessage}`, 'error');
+        
+        // Additional helpful information
+        addLog(`Attempted to connect to: ws://${ip}:8000/ws/${name}`, 'error');
+        addLog('Make sure the orchestrator is running on the specified IP and port 8000', 'error');
     };
 }
 
