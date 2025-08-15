@@ -6,6 +6,8 @@ use std::process::Command; // Use Rust's standard library for commands
 
 fn main() {
   tauri::Builder::default()
+    // Register the shell plugin so the frontend can run Docker commands
+    .plugin(tauri_plugin_shell::init())
     .setup(|app| {
       // Get the path to the sidecar executable
       let sidecar_path = app.path()
