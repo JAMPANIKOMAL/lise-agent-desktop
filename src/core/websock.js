@@ -284,9 +284,10 @@ export default class Websock {
         };
 
         this._websocket.onerror = (e) => {
-            Log.Debug(">> WebSock.onerror: " + e);
+            const errorMessage = e?.message || e?.type || 'Unknown error';
+            Log.Debug(">> WebSock.onerror: " + errorMessage);
             this._eventHandlers.error(e);
-            Log.Debug("<< WebSock.onerror: " + e);
+            Log.Debug("<< WebSock.onerror: " + errorMessage);
         };
     }
 
