@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LISE Agent</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- noVNC Core Library -->
+    <script type="module" src="core/rfb.js"></script>
 </head>
 <body class="bg-gray-900 text-white font-mono">
     <div class="container mx-auto p-4 md:p-8">
@@ -31,10 +33,11 @@
             </form>
         </div>
 
-        <!-- Mission Pane -->
-        <div id="mission-pane" class="bg-gray-800 p-6 rounded-lg shadow-lg mb-6 hidden">
-            <h2 class="text-xl mb-2 text-yellow-400">Mission Objective</h2>
-            <p id="mission-objective">Awaiting mission from orchestrator...</p>
+        <!-- Simulation Environment -->
+        <div id="simulation-view" class="bg-gray-800 rounded-lg shadow-lg mb-6 hidden">
+             <h2 class="text-xl p-6 text-yellow-400">Simulation Environment</h2>
+            <!-- This is where the noVNC screen will be mounted -->
+            <div id="vnc-screen" class="bg-black" style="height: 600px;"></div>
         </div>
 
         <!-- Log Display -->
@@ -44,65 +47,6 @@
         </div>
     </div>
 
-    <script>
-        // --- DOM ELEMENTS ---
-        const statusDisplay = document.getElementById('status-display');
-        const connectionFormContainer = document.getElementById('connection-form-container');
-        const connectionForm = document.getElementById('connection-form');
-        const displayNameInput = document.getElementById('display_name_input');
-        const orchestratorIpInput = document.getElementById('orchestrator_ip_input');
-        const missionPane = document.getElementById('mission-pane');
-        const logOutput = document.getElementById('log-output');
-
-        // --- FUNCTIONS ---
-        function addLog(message, type = 'info') {
-            const timestamp = new Date().toLocaleTimeString();
-            const color = type === 'error' ? 'text-red-400' : 'text-gray-300';
-            logOutput.innerHTML += `<span class="${color}">[${timestamp}] ${message}\n</span>`;
-            logOutput.scrollTop = logOutput.scrollHeight; // Auto-scroll
-        }
-
-        async function handleConnect(event) {
-            event.preventDefault(); // Prevent form from reloading the page
-            const displayName = displayNameInput.value;
-            const orchestratorIp = orchestratorIpInput.value;
-
-            if (!displayName || !orchestratorIp) {
-                alert("Please provide both a display name and an IP address.");
-                return;
-            }
-
-            addLog(`Attempting to connect to ${orchestratorIp}...`);
-
-            try {
-                const response = await fetch('/api/connect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        display_name: displayName,
-                        orchestrator_ip: orchestratorIp
-                    })
-                });
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.detail || 'Connection failed.');
-
-                addLog('Successfully connected to orchestrator!');
-                statusDisplay.textContent = 'Status: Connected';
-                statusDisplay.className = 'text-right px-3 py-1 rounded-md bg-green-800 border border-green-500';
-                connectionFormContainer.style.display = 'none'; // Hide form on success
-                missionPane.style.display = 'block';
-
-            } catch (error) {
-                addLog(`Error: ${error.message}`, 'error');
-                alert(`Connection Failed: ${error.message}`);
-            }
-        }
-
-        // --- INITIALIZATION ---
-        document.addEventListener('DOMContentLoaded', () => {
-            addLog("Agent UI Initialized. Ready to connect.");
-            connectionForm.addEventListener('submit', handleConnect);
-        });
-    </script>
+    <script src="main.js" type="module"></script>
 </body>
 </html>
