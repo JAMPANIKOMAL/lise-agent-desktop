@@ -13,10 +13,9 @@ import os
 import threading
 import time
 import sys
-from typing import Optional
 
 # --- Helper Function for PyInstaller ---
-def resource_path(relative_path: str) -> str:
+def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
@@ -41,6 +40,7 @@ app = FastAPI(
 )
 
 # --- Mount Static Files ---
+# Use the resource_path helper to find the static directory
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 
 # --- AGENT STATE ---
@@ -50,12 +50,11 @@ state = {
     "display_name": None,
     "current_scenario": None,
     "status_message": "Disconnected",
-    "log_thread": None,
+    "log_thread": None
 }
 
 # --- Helper Functions ---
-def get_local_ip() -> str:
-    """Gets the local IP address of the machine."""
+def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('10.255.255.255', 1))
@@ -66,46 +65,33 @@ def get_local_ip() -> str:
         s.close()
     return IP
 
-def stream_logs(compose_file: str, agent_name: str, orchestrator_ip: str):
-    """
-    Streams logs from a Docker Compose project to the Orchestrator.
-    This runs in a separate thread.
-    """
+def stream_logs(compose_file, agent_name, orchestrator_ip):
     log_url = f"http://{orchestrator_ip}:8080/api/log"
-    # Delay to ensure docker-compose up command has time to start containers
-    time.sleep(3)
-    
-    # Use Popen to run the command non-blocking and stream the output
+    time.sleep(3) 
     command = ["docker-compose", "-f", compose_file, "logs", "-f", "--no-log-prefix"]
-    print(f"--- Starting log stream for {agent_name} with command: {' '.join(command)} ---")
-    try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in iter(process.stdout.readline, ''):
-            if not line:
-                break
-            try:
-                log_entry = {"agent_name": agent_name, "log_line": line.strip()}
-                requests.post(log_url, json=log_entry, timeout=2)
-            except requests.exceptions.RequestException:
-                print(f"--- WARN: Could not send log line to orchestrator at {log_url} ---")
-        process.stdout.close()
-        process.wait()
-    except FileNotFoundError:
-        print("--- ERROR: 'docker-compose' command not found. Is Docker installed? ---")
-    except Exception as e:
-        print(f"--- ERROR: An unexpected error occurred during log streaming: {e} ---")
-
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(f"--- Starting log stream for {agent_name} ---")
+    for line in iter(process.stdout.readline, ''):
+        if not line:
+            break
+        try:
+            log_entry = {"agent_name": agent_name, "log_line": line.strip()}
+            requests.post(log_url, json=log_entry, timeout=2)
+        except requests.exceptions.RequestException:
+            print(f"--- WARN: Could not send log line to orchestrator at {log_url} ---")
+    process.stdout.close()
+    process.wait()
     print(f"--- Log stream for {agent_name} ended. ---")
 
 # --- API ENDPOINTS ---
+
 @app.get("/", response_class=FileResponse, tags=["UI"])
 async def read_index():
-    """Serves the main static HTML file for the agent UI."""
+    # Use resource_path to find the index.html file
     return resource_path("static/index.html")
 
 @app.post("/api/connect", tags=["Connection Management"])
 async def connect_to_orchestrator(conn_request: ConnectionRequest):
-    """Registers the agent with the specified orchestrator."""
     state["display_name"] = conn_request.display_name
     state["orchestrator_ip"] = conn_request.orchestrator_ip
     orchestrator_url = f"http://{state['orchestrator_ip']}:8080/api/agents/register"
@@ -118,26 +104,21 @@ async def connect_to_orchestrator(conn_request: ConnectionRequest):
         print(f"--- Successfully registered with orchestrator at {state['orchestrator_ip']} ---")
         return {"status": "success", "message": state["status_message"]}
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to orchestrator: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/scenario/start", tags=["Simulation Control"])
-async def start_scenario(request: ScenarioStartRequest):
-    """Starts a Docker Compose scenario on the agent's machine."""
+async def start_scenario(request: ScenarioStartRequest, background_tasks: BackgroundTasks):
     compose_file = request.compose_file_path
     if not os.path.exists(compose_file):
         raise HTTPException(status_code=404, detail=f"Compose file not found: {compose_file}")
     if state.get("current_scenario"):
         raise HTTPException(status_code=400, detail="A scenario is already running.")
-
-    # Docker Compose command to build and run services in detached mode
     command = ["docker-compose", "-f", compose_file, "up", "--build", "-d"]
     try:
         print(f"--- Starting scenario: {' '.join(command)} ---")
         subprocess.run(command, check=True, capture_output=True, text=True)
         state["current_scenario"] = compose_file
         state["status_message"] = f"Running scenario: {os.path.basename(compose_file)}"
-        
-        # Start log streaming in a new thread
         log_thread = threading.Thread(
             target=stream_logs,
             args=(compose_file, state["display_name"], state["orchestrator_ip"]),
@@ -145,7 +126,6 @@ async def start_scenario(request: ScenarioStartRequest):
         )
         state["log_thread"] = log_thread
         log_thread.start()
-        
         print(f"--- Scenario '{os.path.basename(compose_file)}' started successfully. ---")
         return {"status": "success", "message": "Scenario started."}
     except subprocess.CalledProcessError as e:
@@ -155,10 +135,8 @@ async def start_scenario(request: ScenarioStartRequest):
 
 @app.post("/api/scenario/stop", tags=["Simulation Control"])
 async def stop_scenario():
-    """Stops the currently running Docker Compose scenario."""
     if not state.get("current_scenario"):
         raise HTTPException(status_code=400, detail="No scenario is currently running.")
-    
     compose_file = state["current_scenario"]
     command = ["docker-compose", "-f", compose_file, "down"]
     try:
@@ -166,10 +144,8 @@ async def stop_scenario():
         subprocess.run(command, check=True, capture_output=True, text=True)
         state["current_scenario"] = None
         state["status_message"] = "Idle"
-        
         if state.get("log_thread") and state["log_thread"].is_alive():
              state["log_thread"] = None
-        
         print(f"--- Scenario '{os.path.basename(compose_file)}' stopped successfully. ---")
         return {"status": "success", "message": "Scenario stopped."}
     except subprocess.CalledProcessError as e:

@@ -93,9 +93,8 @@
                 missionPane.style.display = 'block';
 
             } catch (error) {
-                const errorMessage = error?.message || error?.toString() || 'Unknown connection error';
-                addLog(`Error: ${errorMessage}`, 'error');
-                alert(`Connection Failed: ${errorMessage}`);
+                addLog(`Error: ${error.message}`, 'error');
+                alert(`Connection Failed: ${error.message}`);
             }
         }
 

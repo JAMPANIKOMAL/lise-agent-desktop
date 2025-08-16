@@ -3,50 +3,185 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LISE Agent</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- noVNC Core Library -->
-    <script type="module" src="core/rfb.js"></script>
+    <title>LISE Agent Desktop</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: white;
+            overflow: hidden;
+        }
+        
+        #loading {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        #agent-frame {
+            width: 100vw;
+            height: 100vh;
+            border: none;
+            display: none;
+        }
+        
+        .error {
+            background: #ff4444;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px;
+            text-align: center;
+            max-width: 500px;
+        }
+        
+        .retry-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .retry-btn:hover {
+            background: #45a049;
+        }
+        
+        .status {
+            margin: 10px 0;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+    </style>
 </head>
-<body class="bg-gray-900 text-white font-mono">
-    <div class="container mx-auto p-4 md:p-8">
-        <header class="flex justify-between items-center mb-6">
-            <h1 class="text-3xl font-bold text-cyan-400">LISE Agent</h1>
-            <div id="status-display" class="text-right px-3 py-1 rounded-md bg-red-800 border border-red-500">
-                Status: Disconnected
-            </div>
-        </header>
-
-        <!-- Connection Form -->
-        <div id="connection-form-container" class="bg-gray-800 p-6 rounded-lg shadow-lg mb-6">
-            <h2 class="text-xl mb-4 text-yellow-400">Connect to Orchestrator</h2>
-            <form id="connection-form" class="space-y-4">
-                <div>
-                    <label for="display_name_input" class="block text-sm font-medium mb-1">Enter Your Name:</label>
-                    <input type="text" id="display_name_input" placeholder="e.g., Blue-1" class="bg-gray-700 text-white p-2 rounded-md w-full focus:ring-2 focus:ring-cyan-500 focus:outline-none" required>
-                </div>
-                <div>
-                    <label for="orchestrator_ip_input" class="block text-sm font-medium mb-1">Enter Teacher's IP Address:</label>
-                    <input type="text" id="orchestrator_ip_input" value="127.0.0.1" class="bg-gray-700 text-white p-2 rounded-md w-full focus:ring-2 focus:ring-cyan-500 focus:outline-none" required>
-                </div>
-                <button type="submit" class="bg-cyan-600 hover:bg-cyan-700 p-2 rounded-md font-bold w-full transition-colors">Connect</button>
-            </form>
-        </div>
-
-        <!-- Simulation View -->
-        <div id="simulation-view" class="bg-gray-800 rounded-lg shadow-lg mb-6 hidden">
-            <h2 class="text-xl p-6 text-yellow-400">Simulation Environment</h2>
-            <!-- This is where the noVNC screen will be mounted -->
-            <div id="vnc-screen" class="bg-black" style="height: 600px; width: 100%;"></div>
-        </div>
-
-        <!-- Log Display -->
-        <div class="bg-black p-4 rounded-lg h-96 overflow-y-auto border border-gray-700">
-            <h2 class="text-xl mb-2 text-green-400">Event Log</h2>
-            <pre id="log-output" class="whitespace-pre-wrap text-sm"></pre>
-        </div>
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+        <h2>Starting LISE Agent...</h2>
+        <p class="status" id="status">Initializing agent server...</p>
+        <div class="status">Please wait while the agent initializes</div>
     </div>
-
-    <script src="main.js" type="module"></script>
+    
+    <iframe id="agent-frame" src="about:blank"></iframe>
+    
+    <script>
+        const loading = document.getElementById('loading');
+        const frame = document.getElementById('agent-frame');
+        const status = document.getElementById('status');
+        let checkCount = 0;
+        const maxChecks = 120; // 60 seconds
+        let checkInterval;
+        
+        function updateStatus(message) {
+            status.textContent = message;
+            console.log(`[LISE] ${message}`);
+        }
+        
+        function checkAgent() {
+            updateStatus(`Connecting to agent... (attempt ${checkCount + 1}/${maxChecks})`);
+            
+            fetch('http://localhost:8000/', {
+                mode: 'no-cors',
+                cache: 'no-cache'
+            })
+            .then(response => {
+                updateStatus('Agent detected! Loading interface...');
+                // Load the agent interface
+                frame.src = 'http://localhost:8000';
+                
+                // Wait a bit more then hide loading
+                setTimeout(() => {
+                    loading.style.display = 'none';
+                    frame.style.display = 'block';
+                }, 2000);
+            })
+            .catch(error => {
+                checkCount++;
+                if (checkCount < maxChecks) {
+                    if (checkCount < 10) {
+                        updateStatus('Starting Python agent server...');
+                    } else if (checkCount < 30) {
+                        updateStatus('Waiting for agent to start...');
+                    } else {
+                        updateStatus(`Still waiting... (${Math.floor((maxChecks - checkCount) / 2)}s remaining)`);
+                    }
+                    // Don't schedule another check here - let the interval handle it
+                } else {
+                    clearInterval(checkInterval);
+                    loading.innerHTML = `
+                        <div class="error">
+                            <h2>❌ Failed to connect to LISE Agent</h2>
+                            <p>The Python agent server could not be started or is not responding.</p>
+                            <div class="status">
+                                <strong>Troubleshooting:</strong><br>
+                                • Make sure Python is installed<br>
+                                • Check if port 8000 is available<br>
+                                • Try running the agent manually first
+                            </div>
+                            <button class="retry-btn" onclick="location.reload()">🔄 Retry</button>
+                            <button class="retry-btn" onclick="openManualMode()">🔧 Manual Mode</button>
+                        </div>
+                    `;
+                }
+            });
+        }
+        
+        function openManualMode() {
+            // Try to open the agent in a new window
+            const newWindow = window.open('http://localhost:8000', '_blank');
+            if (!newWindow) {
+                alert('Please open http://localhost:8000 manually in your browser');
+            }
+        }
+        
+        // Start checking immediately and then every 500ms
+        updateStatus('Initializing...');
+        checkAgent();
+        checkInterval = setInterval(checkAgent, 500);
+        
+        // Handle frame load events
+        frame.onload = function() {
+            if (frame.src !== 'about:blank') {
+                clearInterval(checkInterval);
+                loading.style.display = 'none';
+                frame.style.display = 'block';
+                updateStatus('Connected successfully!');
+            }
+        };
+        
+        // Handle frame errors
+        frame.onerror = function() {
+            updateStatus('Error loading agent interface');
+        };
+        
+        // Cleanup interval when page unloads
+        window.addEventListener('beforeunload', () => {
+            if (checkInterval) {
+                clearInterval(checkInterval);
+            }
+        });
+    </script>
 </body>
 </html>
