@@ -7,9 +7,9 @@ services:
     # Use the image directly from the GitHub Container Registry
     image: ghcr.io/jampanikomal/lise-scenarios/poc-vm:1.0
     container_name: lise-blue-vm
-    # Map the VNC port (5900) and web app port (5000)
+    # Map the VNC port (5901) and web app port (5000)
     ports:
-      - "5900:5900"
+      - "5901:5901"
       - "5000:5000"
     networks:
       - simulation-net
