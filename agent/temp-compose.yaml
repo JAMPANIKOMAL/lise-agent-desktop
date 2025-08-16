@@ -1,0 +1,33 @@
+# web-injection-scenario.yaml
+# Defines the multi-container "Web Command Injection" incident using a VM.
+
+services:
+  # The Blue Team's vulnerable virtual machine hosted in a Docker container
+  blue-team-vm:
+    # Use the image directly from the GitHub Container Registry
+    image: ghcr.io/jampanikomal/lise-scenarios/poc-vm:1.0
+    container_name: lise-blue-vm
+    # Map the VNC port (5900) and web app port (5000)
+    ports:
+      - "5900:5900"
+      - "5000:5000"
+    networks:
+      - simulation-net
+    # Restart the container automatically if it stops
+    restart: unless-stopped
+
+  # The Red Team's attacker machine
+  red-team-attacker:
+    # Use a publicly available Kali Linux image.
+    image: kalilinux/kali-rolling
+    container_name: lise-red-attacker
+    networks:
+      - simulation-net
+    # Keep the container running in the background so we can 'exec' into it
+    tty: true
+    stdin_open: true
+
+# Defines the isolated network for this simulation
+networks:
+  simulation-net:
+    driver: bridge

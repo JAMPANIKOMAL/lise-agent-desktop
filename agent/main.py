@@ -1,5 +1,6 @@
 # agent/main.py
 # The main application for the LISE Agent.
+# This version includes websockify to proxy VNC traffic.
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +14,7 @@ import os
 import threading
 import time
 import sys
+from typing import List
 
 # --- Helper Function for PyInstaller ---
 def resource_path(relative_path):
@@ -30,17 +32,21 @@ class ConnectionRequest(BaseModel):
     orchestrator_ip: str
 
 class ScenarioStartRequest(BaseModel):
+    compose_file_content: str
+    vnc_port: int
+    web_port: int
+
+class ScenarioStopRequest(BaseModel):
     compose_file_path: str
 
 # Create the FastAPI application instance
 app = FastAPI(
     title="LISE Agent API",
     description="The agent application that runs on student machines to manage simulation containers.",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # --- Mount Static Files ---
-# Use the resource_path helper to find the static directory
 app.mount("/static", StaticFiles(directory=resource_path("static")), name="static")
 
 # --- AGENT STATE ---
@@ -48,9 +54,11 @@ state = {
     "is_connected": False,
     "orchestrator_ip": None,
     "display_name": None,
-    "current_scenario": None,
+    "current_scenario_file": None,
+    "current_scenario_name": None,
     "status_message": "Disconnected",
-    "log_thread": None
+    "log_thread": None,
+    "websockify_process": None
 }
 
 # --- Helper Functions ---
@@ -65,10 +73,10 @@ def get_local_ip():
         s.close()
     return IP
 
-def stream_logs(compose_file, agent_name, orchestrator_ip):
+def stream_logs(compose_file_path, agent_name, orchestrator_ip):
     log_url = f"http://{orchestrator_ip}:8080/api/log"
     time.sleep(3) 
-    command = ["docker-compose", "-f", compose_file, "logs", "-f", "--no-log-prefix"]
+    command = ["docker-compose", "-f", compose_file_path, "logs", "-f", "--no-log-prefix"]
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     print(f"--- Starting log stream for {agent_name} ---")
     for line in iter(process.stdout.readline, ''):
@@ -83,11 +91,27 @@ def stream_logs(compose_file, agent_name, orchestrator_ip):
     process.wait()
     print(f"--- Log stream for {agent_name} ended. ---")
 
+def start_websockify(vnc_port):
+    """Starts the websockify process to proxy VNC traffic."""
+    command = ["websockify", "--web", resource_path("static/novnc/"), "8081", f"localhost:{vnc_port}"]
+    print(f"--- Starting websockify: {' '.join(command)} ---")
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    state["websockify_process"] = process
+    print(f"--- websockify started on port 8081, proxying to localhost:{vnc_port} ---")
+
+def stop_websockify():
+    """Stops the websockify process if it's running."""
+    if state.get("websockify_process"):
+        print("--- Stopping websockify process ---")
+        state["websockify_process"].terminate()
+        state["websockify_process"].wait()
+        state["websockify_process"] = None
+        print("--- websockify process stopped ---")
+
 # --- API ENDPOINTS ---
 
 @app.get("/", response_class=FileResponse, tags=["UI"])
 async def read_index():
-    # Use resource_path to find the index.html file
     return resource_path("static/index.html")
 
 @app.post("/api/connect", tags=["Connection Management"])
@@ -108,52 +132,81 @@ async def connect_to_orchestrator(conn_request: ConnectionRequest):
 
 @app.post("/api/scenario/start", tags=["Simulation Control"])
 async def start_scenario(request: ScenarioStartRequest, background_tasks: BackgroundTasks):
-    compose_file = request.compose_file_path
-    if not os.path.exists(compose_file):
-        raise HTTPException(status_code=404, detail=f"Compose file not found: {compose_file}")
-    if state.get("current_scenario"):
+    temp_compose_file = "temp-compose.yaml"
+    with open(temp_compose_file, "w") as f:
+        f.write(request.compose_file_content)
+
+    if state.get("current_scenario_file"):
+        os.remove(temp_compose_file)
         raise HTTPException(status_code=400, detail="A scenario is already running.")
-    command = ["docker-compose", "-f", compose_file, "up", "--build", "-d"]
+
+    command = ["docker-compose", "-f", temp_compose_file, "up", "-d"]
     try:
         print(f"--- Starting scenario: {' '.join(command)} ---")
         subprocess.run(command, check=True, capture_output=True, text=True)
-        state["current_scenario"] = compose_file
-        state["status_message"] = f"Running scenario: {os.path.basename(compose_file)}"
+        state["current_scenario_file"] = temp_compose_file
+        state["current_scenario_name"] = "vm-scenario"
+        state["status_message"] = f"Running scenario: {state['current_scenario_name']}"
+
+        start_websockify(request.vnc_port)
+
         log_thread = threading.Thread(
             target=stream_logs,
-            args=(compose_file, state["display_name"], state["orchestrator_ip"]),
+            args=(state["current_scenario_file"], state["display_name"], state["orchestrator_ip"]),
             daemon=True
         )
         state["log_thread"] = log_thread
         log_thread.start()
-        print(f"--- Scenario '{os.path.basename(compose_file)}' started successfully. ---")
+
+        print(f"--- Scenario '{state['current_scenario_name']}' started successfully. ---")
         return {"status": "success", "message": "Scenario started."}
     except subprocess.CalledProcessError as e:
+        if os.path.exists(temp_compose_file):
+            os.remove(temp_compose_file)
         raise HTTPException(status_code=500, detail=f"Docker Compose failed: {e.stderr}")
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="docker-compose command not found. Is Docker installed and in your PATH?")
+        if os.path.exists(temp_compose_file):
+            os.remove(temp_compose_file)
+        raise HTTPException(status_code=500, detail="docker-compose or websockify command not found.")
 
 @app.post("/api/scenario/stop", tags=["Simulation Control"])
 async def stop_scenario():
-    if not state.get("current_scenario"):
+    if not state.get("current_scenario_file"):
         raise HTTPException(status_code=400, detail="No scenario is currently running.")
-    compose_file = state["current_scenario"]
+
+    compose_file = state["current_scenario_file"]
     command = ["docker-compose", "-f", compose_file, "down"]
     try:
         print(f"--- Stopping scenario: {' '.join(command)} ---")
         subprocess.run(command, check=True, capture_output=True, text=True)
-        state["current_scenario"] = None
+
+        stop_websockify()
+
+        state["current_scenario_file"] = None
+        state["current_scenario_name"] = None
         state["status_message"] = "Idle"
         if state.get("log_thread") and state["log_thread"].is_alive():
              state["log_thread"] = None
-        print(f"--- Scenario '{os.path.basename(compose_file)}' stopped successfully. ---")
+
+        os.remove(compose_file)
+
+        print(f"--- Scenario stopped successfully. ---")
         return {"status": "success", "message": "Scenario stopped."}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Docker Compose 'down' failed: {e.stderr}")
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="docker-compose command not found. Is Docker installed and in your PATH?")
+        raise HTTPException(status_code=500, detail="docker-compose command not found.")
 
-# This block allows us to run the server directly from the script
+@app.get("/api/status", tags=["Status"])
+def get_status():
+    return {
+        "status": state["status_message"],
+        "is_connected": state["is_connected"],
+        "display_name": state["display_name"],
+        "orchestrator_ip": state["orchestrator_ip"],
+        "current_scenario": state["current_scenario_name"]
+    }
+
 if __name__ == "__main__":
     print("--- Starting LISE Agent Server ---")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)
